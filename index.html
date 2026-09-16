@@ -505,6 +505,7 @@ html[data-theme="dark"] .cal-pill{color:var(--primary);}
         <div class="search-results hidden" id="globalSearchResults"></div>
       </div>
       <div class="topbar-right">
+        <button class="icon-btn" id="soundToggleBtn" title="Activer/couper le son des notifications">🔊</button>
         <button class="icon-btn" id="themeToggleBtn" title="Basculer le thème">🌙</button>
         <button class="icon-btn" id="notifBtn" title="Notifications">🔔<span class="notif-dot hidden" id="notifDot"></span></button>
         <div class="avatar" id="userAvatar">YD</div>
@@ -544,7 +545,7 @@ let state = {
   clients: [],
   rdv: [],
   equipe: [],
-  settings: { companyName:'YolaDex', displayName:'Yola', language:'fr', theme:'light' },
+  settings: { companyName:'YolaDex', displayName:'Yola', language:'fr', theme:'light', soundOn:true },
   view: 'dashboard',       // vue courante
   currentClientId: null,   // pour la fiche client
   calMode: 'month',        // month | week | day
@@ -592,12 +593,49 @@ function toastMsg(msg, icon){
   setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .25s'; setTimeout(()=>el.remove(),250); }, 2600);
 }
 
+/* ---------- SON DE NOTIFICATION ---------- */
+/* Petit carillon synthétisé (Web Audio API), aucun fichier externe requis. */
+let audioCtx = null;
+function getAudioCtx(){
+  if(!audioCtx){
+    try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ audioCtx = null; }
+  }
+  return audioCtx;
+}
+function playNotifSound(){
+  if(!state.settings.soundOn) return;
+  const ctx = getAudioCtx();
+  if(!ctx) return;
+  if(ctx.state === 'suspended'){ ctx.resume().catch(()=>{}); }
+  const now = ctx.currentTime;
+  const notes = [880, 1175]; // petit carillon à deux tons
+  notes.forEach((freq, i)=>{
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const start = now + i*0.14;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.18, start+0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start+0.32);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start+0.34);
+  });
+}
+/* Déverrouille l'audio dès la première interaction (règles des navigateurs) */
+function unlockAudioOnce(){
+  getAudioCtx();
+  document.removeEventListener('click', unlockAudioOnce);
+  document.removeEventListener('keydown', unlockAudioOnce);
+}
+
 /* ---------- CHARGEMENT / DONNÉES DE DÉMO ---------- */
 function loadAll(){
   state.clients = loadRaw(LS.clients, []);
   state.rdv = loadRaw(LS.rdv, []);
   state.equipe = loadRaw(LS.equipe, []);
-  state.settings = loadRaw(LS.settings, state.settings);
+  state.settings = {...state.settings, ...loadRaw(LS.settings, state.settings)};
 }
 
 function seedDemoData(){
@@ -617,6 +655,11 @@ function clientLastRdv(clientId){
   return list[0] || null;
 }
 function sortedRdv(list){ return [...list].sort((a,b)=> (a.date+a.heure).localeCompare(b.date+b.heure)); }
+function rdvAvecLabel(r){
+  if(r.avecNom) return r.avecNom;
+  const m = getMember(r.avecId);
+  return m ? memberFullName(m) : '—';
+}
 
 /* ---------- STATUTS DES RENDEZ-VOUS ---------- */
 const STATUT_LABELS = {prevu:'Prévu', en_attente:'En attente', termine:'Terminé', annule:'Annulé'};
@@ -759,15 +802,15 @@ function emptyState(icon, text){
 
 function rdvRowHtml(r, showDate){
   const client = getClient(r.clientId);
-  const member = getMember(r.avecId);
   const statusLabel = statutLabel(r.statut);
   return `
     <div class="rdv-row" data-open-rdv="${r.id}">
       <div class="rdv-time ${showDate ? 'date' : ''}">${showDate ? formatDateShort(r.date) : r.heure}</div>
       <div class="rdv-info">
         <div class="name">${escapeHtml(clientFullName(client))}</div>
-        <div class="sub">${showDate ? r.heure+' · ' : ''}Avec ${escapeHtml(memberFullName(member))} · ${escapeHtml(r.motif||'—')}</div>
+        <div class="sub">${showDate ? r.heure+' · ' : ''}Avec ${escapeHtml(rdvAvecLabel(r))} · ${escapeHtml(r.motif||'—')}</div>
       </div>
+      <button class="icon-mini" title="Signaler l'arrivée du client (son)" data-signal-arrival="${r.id}">🔔</button>
       <span class="badge badge-${r.statut}"><span class="badge-dot"></span>${statusLabel}</span>
     </div>`;
 }
@@ -882,8 +925,9 @@ function viewClientDetail(id){
             <div class="rdv-time date">${formatDateShort(r.date)}</div>
             <div class="rdv-info">
               <div class="name">${escapeHtml(r.motif||'Rendez-vous')}</div>
-              <div class="sub">${r.heure} · Avec ${escapeHtml(memberFullName(getMember(r.avecId)))}</div>
+              <div class="sub">${r.heure} · Avec ${escapeHtml(rdvAvecLabel(r))}</div>
             </div>
+            <button class="icon-mini" title="Signaler l'arrivée du client (son)" data-signal-arrival="${r.id}">🔔</button>
             <span class="badge badge-${r.statut}"><span class="badge-dot"></span>${statutLabel(r.statut)}</span>
           </div>`).join('') : emptyState('📅','Aucun rendez-vous pour ce client pour le moment.')}
       </div>
@@ -902,8 +946,8 @@ function viewRdv(){
   if(rdvSearchTerm){
     const q = rdvSearchTerm.toLowerCase();
     list = list.filter(r=>{
-      const c = getClient(r.clientId), m = getMember(r.avecId);
-      return [clientFullName(c), memberFullName(m), r.motif].some(v=>(v||'').toLowerCase().includes(q));
+      const c = getClient(r.clientId);
+      return [clientFullName(c), rdvAvecLabel(r), r.motif].some(v=>(v||'').toLowerCase().includes(q));
     });
   }
   list = list.reverse();
@@ -941,9 +985,9 @@ function viewRdv(){
               <td class="col-date">${formatDateShort(r.date)}</td>
               <td class="col-date">${r.heure}</td>
               <td class="row-name" data-open-client="${r.clientId}">${escapeHtml(clientFullName(getClient(r.clientId)))}</td>
-              <td>${escapeHtml(memberFullName(getMember(r.avecId)))}</td>
+              <td>${escapeHtml(rdvAvecLabel(r))}</td>
               <td>${escapeHtml(r.motif||'—')}</td>
-              <td class="col-status"><span class="badge badge-${r.statut}"><span class="badge-dot"></span>${statutLabel(r.statut)}</span></td>
+              <td class="col-status"><div style="display:flex;align-items:center;justify-content:center;gap:6px;"><span class="badge badge-${r.statut}"><span class="badge-dot"></span>${statutLabel(r.statut)}</span><button class="icon-mini" title="Signaler l'arrivée du client (son)" data-signal-arrival="${r.id}">🔔</button></div></td>
               <td class="col-actions"><div class="row-actions">
                 <button class="icon-mini" title="Modifier" data-edit-rdv="${r.id}">✏️</button>
                 <button class="icon-mini danger" title="Supprimer" data-del-rdv="${r.id}">🗑️</button>
@@ -966,8 +1010,11 @@ function viewRdv(){
             </div>
           </div>
           <div class="ic-foot">
-            <span class="badge badge-${r.statut}"><span class="badge-dot"></span>${statutLabel(r.statut)}</span>
-            <span style="font-size:12px;color:var(--text-muted);">Avec ${escapeHtml(memberFullName(getMember(r.avecId)))}</span>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span class="badge badge-${r.statut}"><span class="badge-dot"></span>${statutLabel(r.statut)}</span>
+              <button class="icon-mini" title="Signaler l'arrivée du client (son)" data-signal-arrival="${r.id}">🔔</button>
+            </div>
+            <span style="font-size:12px;color:var(--text-muted);">Avec ${escapeHtml(rdvAvecLabel(r))}</span>
           </div>
         </div>`).join('')}
     </div>`}
@@ -1139,6 +1186,16 @@ function viewParametres(){
               <span class="switch-track"></span>
             </label>
           </div>
+          <div class="settings-row">
+            <div>
+              <div class="srow-label">Son des notifications</div>
+              <div class="srow-desc">Jouer un carillon lors de l'arrivée d'une nouvelle notification.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="setSoundOn" ${s.soundOn!==false?'checked':''}>
+              <span class="switch-track"></span>
+            </label>
+          </div>
           <div style="display:flex;justify-content:flex-end;margin-top:6px;">
             <button class="btn btn-primary" id="saveSettingsBtn">Enregistrer les paramètres</button>
           </div>
@@ -1195,18 +1252,25 @@ function computeNotifications(){
     const nowMinutes = new Date().getHours()*60+new Date().getMinutes();
     const delta = rdvMinutes - nowMinutes;
     if(delta>=0 && delta<=30){
-      list.push({icon:'🔔', text:`Rendez-vous avec ${clientFullName(client)} dans ${delta<=1?'moins d\'une minute':delta+' min'}`, time:r.heure});
+      list.push({icon:'🔔', text:`Rendez-vous avec ${clientFullName(client)} dans ${delta<=1?'moins d\'une minute':delta+' min'}`, time:r.heure, key:`rdv-imminent-${r.id}`});
     } else {
-      list.push({icon:'🔔', text:`Rendez-vous aujourd'hui avec ${clientFullName(client)}`, time:r.heure});
+      list.push({icon:'🔔', text:`Rendez-vous aujourd'hui avec ${clientFullName(client)}`, time:r.heure, key:`rdv-today-${r.id}`});
     }
   });
   const recentClients = state.clients.filter(c=> (Date.now()-c.createdAt) < 1000*60*60*24 );
-  recentClients.forEach(c=> list.push({icon:'🔔', text:`Nouveau client ajouté : ${clientFullName(c)}`, time:'récemment'}));
+  recentClients.forEach(c=> list.push({icon:'🔔', text:`Nouveau client ajouté : ${clientFullName(c)}`, time:'récemment', key:`newclient-${c.id}`}));
   return list;
 }
 function updateNotifDot(){
   const list = computeNotifications();
   document.getElementById('notifDot').classList.toggle('hidden', list.length===0);
+}
+/* Signale manuellement l'arrivée d'un client : joue un son + un toast */
+function signalArrival(rdvId){
+  const r = state.rdv.find(x=>x.id===rdvId);
+  if(!r) return;
+  playNotifSound();
+  toastMsg(`Arrivée signalée : ${clientFullName(getClient(r.clientId))}`, '🔔');
 }
 function renderNotifPanel(){
   const list = computeNotifications();
@@ -1224,52 +1288,6 @@ function openModal(html){
   document.getElementById('activeOverlay').addEventListener('click', (e)=>{ if(e.target.id==='activeOverlay') closeModal(); });
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
-
-/* ---------- AUTOCOMPLÉTION GÉNÉRIQUE (taper un nom) ---------- */
-function setupAutocomplete(inputEl, hiddenEl, listEl, items){
-  function renderList(filterVal){
-    const q = (filterVal||'').trim().toLowerCase();
-    const filtered = q ? items.filter(it=>it.label.toLowerCase().includes(q)) : items;
-    if(!filtered.length){
-      listEl.innerHTML = `<div class="sr-empty">Aucun résultat</div>`;
-    } else {
-      listEl.innerHTML = filtered.slice(0,8).map(it=>`<button type="button" class="sr-item" data-ac-id="${it.id}">${escapeHtml(it.label)}</button>`).join('');
-    }
-    listEl.classList.remove('hidden');
-  }
-  function tryAutoMatch(){
-    const typed = inputEl.value.trim().toLowerCase();
-    if(!typed){ hiddenEl.value=''; return; }
-    const exact = items.find(it=>it.label.toLowerCase()===typed);
-    if(exact){ hiddenEl.value = exact.id; inputEl.value = exact.label; }
-  }
-  inputEl.addEventListener('focus', ()=> renderList(inputEl.value));
-  inputEl.addEventListener('input', ()=>{
-    hiddenEl.value = '';
-    renderList(inputEl.value);
-  });
-  inputEl.addEventListener('blur', ()=> setTimeout(()=>{ tryAutoMatch(); }, 150));
-  listEl.addEventListener('mousedown', (e)=> e.preventDefault()); // évite le blur avant le clic
-  listEl.addEventListener('click', (e)=>{
-    const btn = e.target.closest('[data-ac-id]');
-    if(!btn) return;
-    const id = btn.dataset.acId;
-    const item = items.find(it=>it.id===id);
-    if(item){ inputEl.value = item.label; hiddenEl.value = item.id; }
-    listEl.classList.add('hidden');
-  });
-  document.addEventListener('click', (e)=>{
-    if(!inputEl.contains(e.target) && !listEl.contains(e.target)){
-      listEl.classList.add('hidden');
-    }
-  });
-}
-function findIdByTypedLabel(items, typedValue){
-  const typed = (typedValue||'').trim().toLowerCase();
-  if(!typed) return '';
-  const match = items.find(it=>it.label.toLowerCase()===typed);
-  return match ? match.id : '';
-}
 
 /* ---------- MODAL CLIENT ---------- */
 function openClientModal(clientId){
@@ -1326,10 +1344,9 @@ function openClientModal(clientId){
 /* ---------- MODAL RENDEZ-VOUS ---------- */
 function openRdvModal(rdvId, prefillClientId){
   state.editingRdvId = rdvId || null;
-  const r = rdvId ? state.rdv.find(x=>x.id===rdvId) : {clientId:prefillClientId||'', date:todayStr(), heure:'09:00', avecId:'', motif:'', notes:'', statut:'prevu'};
-  const memberItems = state.equipe.map(m=>({id:m.id, label:`${memberFullName(m)} (${m.role})`}));
+  const r = rdvId ? state.rdv.find(x=>x.id===rdvId) : {clientId:prefillClientId||'', date:todayStr(), heure:'09:00', avecNom:'', motif:'', notes:'', statut:'prevu'};
   const existingClient = r.clientId ? getClient(r.clientId) : null;
-  const memberLabelPrefill = r.avecId ? `${memberFullName(getMember(r.avecId))} (${getMember(r.avecId)?.role||''})` : '';
+  const avecPrefill = r.avecNom || (r.avecId ? memberFullName(getMember(r.avecId)) : '');
 
   openModal(`
     <div class="modal modal-wide">
@@ -1340,11 +1357,9 @@ function openRdvModal(rdvId, prefillClientId){
           <div class="form-field"><label>Nom du client *</label><input type="text" id="rf_client_nom" value="${escapeHtml(existingClient?existingClient.nom:'')}"></div>
           <div class="form-field"><label>Date *</label><input type="date" id="rf_date" value="${r.date}"></div>
           <div class="form-field"><label>Heure *</label><input type="time" id="rf_heure" value="${r.heure}"></div>
-          <div class="form-field full autocomplete-wrap">
+          <div class="form-field full">
             <label>Personne à rencontrer</label>
-            <input type="text" id="rf_avec_input" autocomplete="off" placeholder="Tapez le nom du membre..." value="${escapeHtml(memberLabelPrefill)}">
-            <input type="hidden" id="rf_avec" value="${r.avecId||''}">
-            <div class="autocomplete-list hidden" id="rf_avec_list"></div>
+            <input type="text" id="rf_avec_input" autocomplete="off" placeholder="Ex. : Jean Dupont, le directeur..." value="${escapeHtml(avecPrefill)}">
           </div>
           <div class="form-field full"><label>Motif du rendez-vous</label><input type="text" id="rf_motif" value="${escapeHtml(r.motif)}"></div>
           <div class="form-field full"><label>Notes</label><textarea id="rf_notes">${escapeHtml(r.notes)}</textarea></div>
@@ -1374,13 +1389,6 @@ function openRdvModal(rdvId, prefillClientId){
   const deleteBtn = document.getElementById('mDeleteRdv');
   if(deleteBtn) deleteBtn.onclick = ()=>{ closeModal(); deleteRdv(rdvId); };
 
-  setupAutocomplete(
-    document.getElementById('rf_avec_input'),
-    document.getElementById('rf_avec'),
-    document.getElementById('rf_avec_list'),
-    memberItems
-  );
-
   document.querySelectorAll('.status-opt').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       document.querySelectorAll('.status-opt').forEach(b=>b.classList.remove('selected'));
@@ -1404,16 +1412,13 @@ function openRdvModal(rdvId, prefillClientId){
     }
     save(LS.clients, state.clients);
 
-    let avecId = document.getElementById('rf_avec').value;
-    if(!avecId){
-      avecId = findIdByTypedLabel(memberItems, document.getElementById('rf_avec_input').value);
-    }
+    const avecNom = document.getElementById('rf_avec_input').value.trim();
     const date = document.getElementById('rf_date').value;
     const heure = document.getElementById('rf_heure').value;
     if(!date || !heure){ toastMsg('Date et heure sont obligatoires.', '⚠️'); return; }
     const data = {
       clientId, date, heure,
-      avecId,
+      avecNom,
       motif: document.getElementById('rf_motif').value.trim(),
       notes: document.getElementById('rf_notes').value.trim(),
       statut: document.getElementById('rf_statut').value
@@ -1555,6 +1560,18 @@ function toggleTheme(){
   save(LS.settings, state.settings);
   applyTheme();
 }
+function applySoundIcon(){
+  const btn = document.getElementById('soundToggleBtn');
+  if(!btn) return;
+  btn.textContent = state.settings.soundOn!==false ? '🔊' : '🔇';
+}
+function toggleSound(){
+  state.settings.soundOn = state.settings.soundOn===false ? true : false;
+  save(LS.settings, state.settings);
+  applySoundIcon();
+  toastMsg(state.settings.soundOn ? 'Son des notifications activé.' : 'Son des notifications coupé.', state.settings.soundOn?'🔊':'🔇');
+  if(state.settings.soundOn) playNotifSound();
+}
 
 /* =========================================================
    ÉVÉNEMENTS DE VUE (délégation légère après chaque render)
@@ -1570,6 +1587,7 @@ function bindViewEvents(){
   content.querySelectorAll('[data-open-rdv]').forEach(el=> el.addEventListener('click', ()=> openRdvModal(el.dataset.openRdv)));
   content.querySelectorAll('[data-edit-rdv]').forEach(el=> el.addEventListener('click', (e)=>{ e.stopPropagation(); openRdvModal(el.dataset.editRdv); }));
   content.querySelectorAll('[data-del-rdv]').forEach(el=> el.addEventListener('click', (e)=>{ e.stopPropagation(); deleteRdv(el.dataset.delRdv); }));
+  content.querySelectorAll('[data-signal-arrival]').forEach(el=> el.addEventListener('click', (e)=>{ e.stopPropagation(); signalArrival(el.dataset.signalArrival); }));
 
   content.querySelectorAll('[data-edit-member]').forEach(el=> el.addEventListener('click', ()=> openMemberModal(el.dataset.editMember)));
   content.querySelectorAll('[data-del-member]').forEach(el=> el.addEventListener('click', ()=> deleteMember(el.dataset.delMember)));
@@ -1602,8 +1620,10 @@ function bindViewEvents(){
     state.settings.displayName = document.getElementById('setDisplayName').value.trim();
     state.settings.language = document.getElementById('setLanguage').value;
     state.settings.theme = document.getElementById('setDarkMode').checked ? 'dark' : 'light';
+    state.settings.soundOn = document.getElementById('setSoundOn').checked;
     save(LS.settings, state.settings);
     applyTheme();
+    applySoundIcon();
     toastMsg('Paramètres enregistrés.');
     render();
   });
@@ -1643,6 +1663,9 @@ function renderPartialRdv(){
    ========================================================= */
 function initGlobalEvents(){
   document.getElementById('themeToggleBtn').addEventListener('click', toggleTheme);
+  document.getElementById('soundToggleBtn').addEventListener('click', toggleSound);
+  document.addEventListener('click', unlockAudioOnce);
+  document.addEventListener('keydown', unlockAudioOnce);
 
   const searchInput = document.getElementById('globalSearchInput');
   searchInput.addEventListener('input', (e)=> runGlobalSearch(e.target.value.trim()));
@@ -1694,6 +1717,7 @@ function boot(){
   seedDemoData();
   loadAll();
   applyTheme();
+  applySoundIcon();
   initGlobalEvents();
   render();
   setInterval(()=>{ updateNotifDot(); }, 60000);
