@@ -253,7 +253,8 @@ html[data-theme="dark"] .nav-item.active{color:var(--primary);}
 
 .rdv-row{display:flex;align-items:center;gap:12px;padding:12px 12px;border-radius:10px;transition:background .15s;}
 .rdv-row:hover{background:var(--surface-2);cursor:pointer;}
-.rdv-time{width:56px;flex-shrink:0;font-weight:700;font-size:13.5px;color:var(--primary-dark);font-family:var(--font-display);}
+.rdv-time{width:56px;flex-shrink:0;font-weight:700;font-size:13.5px;color:var(--primary-dark);font-family:var(--font-display);white-space:nowrap;}
+.rdv-time.date{width:84px;}
 html[data-theme="dark"] .rdv-time{color:var(--primary);}
 .rdv-info{flex:1;min-width:0;}
 .rdv-info .name{font-size:14px;font-weight:600;}
@@ -366,6 +367,14 @@ td.col-date,th.col-date{white-space:nowrap;}
 
 .confirm-modal .modal-body{padding:24px;font-size:14px;color:var(--text);line-height:1.5;}
 .confirm-modal .warn-ic{font-size:30px;margin-bottom:10px;}
+
+/* ---------- AUTOCOMPLETE (champs "tapez le nom") ---------- */
+.autocomplete-wrap{position:relative;}
+.autocomplete-list{
+  position:absolute;top:calc(100% + 4px);left:0;right:0;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);
+  box-shadow:var(--shadow-lg);max-height:220px;overflow-y:auto;z-index:120;
+}
 
 /* ---------- CLIENT DETAIL ---------- */
 .detail-head{display:flex;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap;}
@@ -754,7 +763,7 @@ function rdvRowHtml(r, showDate){
   const statusLabel = statutLabel(r.statut);
   return `
     <div class="rdv-row" data-open-rdv="${r.id}">
-      <div class="rdv-time">${showDate ? formatDateShort(r.date) : r.heure}</div>
+      <div class="rdv-time ${showDate ? 'date' : ''}">${showDate ? formatDateShort(r.date) : r.heure}</div>
       <div class="rdv-info">
         <div class="name">${escapeHtml(clientFullName(client))}</div>
         <div class="sub">${showDate ? r.heure+' · ' : ''}Avec ${escapeHtml(memberFullName(member))} · ${escapeHtml(r.motif||'—')}</div>
@@ -870,7 +879,7 @@ function viewClientDetail(id){
       <div class="card-body">
         ${history.length ? [...history].reverse().map(r=>`
           <div class="rdv-row" data-open-rdv="${r.id}">
-            <div class="rdv-time">${formatDateShort(r.date)}</div>
+            <div class="rdv-time date">${formatDateShort(r.date)}</div>
             <div class="rdv-info">
               <div class="name">${escapeHtml(r.motif||'Rendez-vous')}</div>
               <div class="sub">${r.heure} · Avec ${escapeHtml(memberFullName(getMember(r.avecId)))}</div>
@@ -1216,6 +1225,52 @@ function openModal(html){
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
 
+/* ---------- AUTOCOMPLÉTION GÉNÉRIQUE (taper un nom) ---------- */
+function setupAutocomplete(inputEl, hiddenEl, listEl, items){
+  function renderList(filterVal){
+    const q = (filterVal||'').trim().toLowerCase();
+    const filtered = q ? items.filter(it=>it.label.toLowerCase().includes(q)) : items;
+    if(!filtered.length){
+      listEl.innerHTML = `<div class="sr-empty">Aucun résultat</div>`;
+    } else {
+      listEl.innerHTML = filtered.slice(0,8).map(it=>`<button type="button" class="sr-item" data-ac-id="${it.id}">${escapeHtml(it.label)}</button>`).join('');
+    }
+    listEl.classList.remove('hidden');
+  }
+  function tryAutoMatch(){
+    const typed = inputEl.value.trim().toLowerCase();
+    if(!typed){ hiddenEl.value=''; return; }
+    const exact = items.find(it=>it.label.toLowerCase()===typed);
+    if(exact){ hiddenEl.value = exact.id; inputEl.value = exact.label; }
+  }
+  inputEl.addEventListener('focus', ()=> renderList(inputEl.value));
+  inputEl.addEventListener('input', ()=>{
+    hiddenEl.value = '';
+    renderList(inputEl.value);
+  });
+  inputEl.addEventListener('blur', ()=> setTimeout(()=>{ tryAutoMatch(); }, 150));
+  listEl.addEventListener('mousedown', (e)=> e.preventDefault()); // évite le blur avant le clic
+  listEl.addEventListener('click', (e)=>{
+    const btn = e.target.closest('[data-ac-id]');
+    if(!btn) return;
+    const id = btn.dataset.acId;
+    const item = items.find(it=>it.id===id);
+    if(item){ inputEl.value = item.label; hiddenEl.value = item.id; }
+    listEl.classList.add('hidden');
+  });
+  document.addEventListener('click', (e)=>{
+    if(!inputEl.contains(e.target) && !listEl.contains(e.target)){
+      listEl.classList.add('hidden');
+    }
+  });
+}
+function findIdByTypedLabel(items, typedValue){
+  const typed = (typedValue||'').trim().toLowerCase();
+  if(!typed) return '';
+  const match = items.find(it=>it.label.toLowerCase()===typed);
+  return match ? match.id : '';
+}
+
 /* ---------- MODAL CLIENT ---------- */
 function openClientModal(clientId){
   state.editingClientId = clientId || null;
@@ -1272,24 +1327,24 @@ function openClientModal(clientId){
 function openRdvModal(rdvId, prefillClientId){
   state.editingRdvId = rdvId || null;
   const r = rdvId ? state.rdv.find(x=>x.id===rdvId) : {clientId:prefillClientId||'', date:todayStr(), heure:'09:00', avecId:'', motif:'', notes:'', statut:'prevu'};
-  const clientOptions = state.clients.map(c=>`<option value="${c.id}" ${r.clientId===c.id?'selected':''}>${escapeHtml(clientFullName(c))}</option>`).join('');
-  const memberOptions = state.equipe.map(m=>`<option value="${m.id}" ${r.avecId===m.id?'selected':''}>${escapeHtml(memberFullName(m))} (${escapeHtml(m.role)})</option>`).join('');
+  const memberItems = state.equipe.map(m=>({id:m.id, label:`${memberFullName(m)} (${m.role})`}));
+  const existingClient = r.clientId ? getClient(r.clientId) : null;
+  const memberLabelPrefill = r.avecId ? `${memberFullName(getMember(r.avecId))} (${getMember(r.avecId)?.role||''})` : '';
 
   openModal(`
     <div class="modal modal-wide">
       <div class="modal-head"><h3>${rdvId?'Modifier le rendez-vous':'Nouveau rendez-vous'}</h3><button class="modal-close" id="mClose">✕</button></div>
       <div class="modal-body">
-        ${state.clients.length===0 ? `<p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">Aucun client enregistré. Ajoutez d'abord un client.</p>` : ''}
         <div class="form-grid">
-          <div class="form-field full">
-            <label>Client *</label>
-            <select id="rf_client"><option value="">— Sélectionner un client —</option>${clientOptions}</select>
-          </div>
+          <div class="form-field"><label>Prénom du client *</label><input type="text" id="rf_client_prenom" value="${escapeHtml(existingClient?existingClient.prenom:'')}"></div>
+          <div class="form-field"><label>Nom du client *</label><input type="text" id="rf_client_nom" value="${escapeHtml(existingClient?existingClient.nom:'')}"></div>
           <div class="form-field"><label>Date *</label><input type="date" id="rf_date" value="${r.date}"></div>
           <div class="form-field"><label>Heure *</label><input type="time" id="rf_heure" value="${r.heure}"></div>
-          <div class="form-field full">
+          <div class="form-field full autocomplete-wrap">
             <label>Personne à rencontrer</label>
-            <select id="rf_avec"><option value="">— Sélectionner un membre —</option>${memberOptions}</select>
+            <input type="text" id="rf_avec_input" autocomplete="off" placeholder="Tapez le nom du membre..." value="${escapeHtml(memberLabelPrefill)}">
+            <input type="hidden" id="rf_avec" value="${r.avecId||''}">
+            <div class="autocomplete-list hidden" id="rf_avec_list"></div>
           </div>
           <div class="form-field full"><label>Motif du rendez-vous</label><input type="text" id="rf_motif" value="${escapeHtml(r.motif)}"></div>
           <div class="form-field full"><label>Notes</label><textarea id="rf_notes">${escapeHtml(r.notes)}</textarea></div>
@@ -1305,14 +1360,27 @@ function openRdvModal(rdvId, prefillClientId){
           </div>
         </div>
       </div>
-      <div class="modal-foot">
-        <button class="btn btn-outline" id="mCancel">Annuler</button>
-        <button class="btn btn-primary" id="mSaveRdv">Enregistrer</button>
+      <div class="modal-foot" style="${rdvId?'justify-content:space-between;':''}">
+        ${rdvId ? `<button class="btn btn-danger" id="mDeleteRdv">🗑️ Supprimer</button>` : ''}
+        <div style="display:flex;gap:10px;${rdvId?'':'width:100%;justify-content:flex-end;'}">
+          <button class="btn btn-outline" id="mCancel">Annuler</button>
+          <button class="btn btn-primary" id="mSaveRdv">Enregistrer</button>
+        </div>
       </div>
     </div>
   `);
   document.getElementById('mClose').onclick = closeModal;
   document.getElementById('mCancel').onclick = closeModal;
+  const deleteBtn = document.getElementById('mDeleteRdv');
+  if(deleteBtn) deleteBtn.onclick = ()=>{ closeModal(); deleteRdv(rdvId); };
+
+  setupAutocomplete(
+    document.getElementById('rf_avec_input'),
+    document.getElementById('rf_avec'),
+    document.getElementById('rf_avec_list'),
+    memberItems
+  );
+
   document.querySelectorAll('.status-opt').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       document.querySelectorAll('.status-opt').forEach(b=>b.classList.remove('selected'));
@@ -1321,13 +1389,31 @@ function openRdvModal(rdvId, prefillClientId){
     });
   });
   document.getElementById('mSaveRdv').onclick = ()=>{
-    const clientId = document.getElementById('rf_client').value;
+    const clientPrenom = document.getElementById('rf_client_prenom').value.trim();
+    const clientNom = document.getElementById('rf_client_nom').value.trim();
+    if(!clientPrenom || !clientNom){ toastMsg('Le prénom et le nom du client sont obligatoires.', '⚠️'); return; }
+
+    let clientId = existingClient ? existingClient.id : null;
+    if(clientId){
+      const idx = state.clients.findIndex(x=>x.id===clientId);
+      if(idx>-1) state.clients[idx] = {...state.clients[idx], prenom:clientPrenom, nom:clientNom};
+    } else {
+      const newClient = {id:uid('cli'), prenom:clientPrenom, nom:clientNom, telephone:'', email:'', entreprise:'', adresse:'', notes:'', createdAt:Date.now()};
+      state.clients.push(newClient);
+      clientId = newClient.id;
+    }
+    save(LS.clients, state.clients);
+
+    let avecId = document.getElementById('rf_avec').value;
+    if(!avecId){
+      avecId = findIdByTypedLabel(memberItems, document.getElementById('rf_avec_input').value);
+    }
     const date = document.getElementById('rf_date').value;
     const heure = document.getElementById('rf_heure').value;
-    if(!clientId || !date || !heure){ toastMsg('Client, date et heure sont obligatoires.', '⚠️'); return; }
+    if(!date || !heure){ toastMsg('Date et heure sont obligatoires.', '⚠️'); return; }
     const data = {
       clientId, date, heure,
-      avecId: document.getElementById('rf_avec').value,
+      avecId,
       motif: document.getElementById('rf_motif').value.trim(),
       notes: document.getElementById('rf_notes').value.trim(),
       statut: document.getElementById('rf_statut').value
