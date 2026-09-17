@@ -1401,16 +1401,18 @@ function openRdvModal(rdvId, prefillClientId){
     const clientNom = document.getElementById('rf_client_nom').value.trim();
     if(!clientPrenom || !clientNom){ toastMsg('Le prénom et le nom du client sont obligatoires.', '⚠️'); return; }
 
-    let clientId = existingClient ? existingClient.id : null;
-    if(clientId){
-      const idx = state.clients.findIndex(x=>x.id===clientId);
-      if(idx>-1) state.clients[idx] = {...state.clients[idx], prenom:clientPrenom, nom:clientNom};
+    let clientId;
+    const nameUnchanged = existingClient &&
+      clientPrenom.toLowerCase() === (existingClient.prenom||'').trim().toLowerCase() &&
+      clientNom.toLowerCase() === (existingClient.nom||'').trim().toLowerCase();
+    if(nameUnchanged){
+      clientId = existingClient.id;
     } else {
       const newClient = {id:uid('cli'), prenom:clientPrenom, nom:clientNom, telephone:'', email:'', entreprise:'', adresse:'', notes:'', createdAt:Date.now()};
       state.clients.push(newClient);
       clientId = newClient.id;
+      save(LS.clients, state.clients);
     }
-    save(LS.clients, state.clients);
 
     const avecNom = document.getElementById('rf_avec_input').value.trim();
     const date = document.getElementById('rf_date').value;
