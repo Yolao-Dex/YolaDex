@@ -11,8 +11,6 @@
 <style>
 /* =========================================================
    YOLADEX — DESIGN TOKENS
-   Palette : teal profond (identité) + ocre chaud (accent statut/CTA)
-   Typo    : Sora (titres / logo) + Inter (texte courant)
    ========================================================= */
 :root{
   --bg:#F5F7F6;
@@ -312,7 +310,7 @@ td.col-date,th.col-date{white-space:nowrap;}
 .icon-mini:hover{background:var(--surface-2);color:var(--text);}
 .icon-mini.danger:hover{color:var(--danger);border-color:var(--danger);}
 
-/* ---------- CARD LIST (mobile rdv / clients) ---------- */
+/* ---------- CARD LIST (mobile) ---------- */
 .card-list{display:none;flex-direction:column;gap:10px;}
 .item-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:14px 16px;}
 .item-card .ic-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px;}
@@ -368,7 +366,6 @@ td.col-date,th.col-date{white-space:nowrap;}
 .confirm-modal .modal-body{padding:24px;font-size:14px;color:var(--text);line-height:1.5;}
 .confirm-modal .warn-ic{font-size:30px;margin-bottom:10px;}
 
-/* ---------- AUTOCOMPLETE (champs "tapez le nom") ---------- */
 .autocomplete-wrap{position:relative;}
 .autocomplete-list{
   position:absolute;top:calc(100% + 4px);left:0;right:0;
@@ -479,7 +476,6 @@ html[data-theme="dark"] .cal-pill{color:var(--primary);}
 <body>
 
 <div class="app">
-  <!-- ================= SIDEBAR ================= -->
   <aside class="sidebar" id="sidebar">
     <div class="brand">
       <div class="brand-mark">YD</div>
@@ -495,13 +491,12 @@ html[data-theme="dark"] .cal-pill{color:var(--primary);}
   </aside>
   <div class="overlay-mobile" id="mobileOverlay"></div>
 
-  <!-- ================= MAIN ================= -->
   <div class="main">
     <header class="topbar">
       <button class="hamburger" id="hamburgerBtn" aria-label="Menu">☰</button>
       <div class="search-wrap" id="globalSearchWrap">
         <span class="search-ic">🔍</span>
-        <input type="text" id="globalSearchInput" placeholder="Rechercher un client, un rendez-vous, un membre...">
+        <input type="text" id="globalSearchInput" placeholder="Rechercher un client, un rendez-vous, une plainte...">
         <div class="search-results hidden" id="globalSearchResults"></div>
       </div>
       <div class="topbar-right">
@@ -522,37 +517,34 @@ html[data-theme="dark"] .cal-pill{color:var(--primary);}
 <script>
 /* =========================================================
    YOLADEX — LOGIQUE APPLICATIVE
-   Stockage : localStorage (clés yoladex_*)
    ========================================================= */
-
-/* ---------- CLÉS DE STOCKAGE ---------- */
-/* Suffixe _v2 : garantit un démarrage vide même si une ancienne version
-   de démonstration a été chargée précédemment dans ce même navigateur. */
 const LS = {
   clients:'yoladex_clients_v2',
   rdv:'yoladex_rendezvous_v2',
   equipe:'yoladex_equipe_v2',
+  plaintes:'yoladex_plaintes_v2',
   settings:'yoladex_settings_v2',
   init:'yoladex_initialized_v2'
 };
-const OLD_LS_KEYS = ['yoladex_clients','yoladex_rendezvous','yoladex_equipe','yoladex_settings','yoladex_initialized'];
+const OLD_LS_KEYS = ['yoladex_clients','yoladex_rendezvous','yoladex_equipe','yoladex_plaintes','yoladex_settings','yoladex_initialized'];
 function purgeOldDemoStorage(){
   OLD_LS_KEYS.forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
 }
 
-/* ---------- ÉTAT GLOBAL ---------- */
 let state = {
   clients: [],
   rdv: [],
   equipe: [],
+  plaintes: [],
   settings: { companyName:'YolaDex', displayName:'Yola', language:'fr', theme:'light', soundOn:true },
-  view: 'dashboard',       // vue courante
-  currentClientId: null,   // pour la fiche client
-  calMode: 'month',        // month | week | day
-  calRef: new Date(),      // date de référence du calendrier
+  view: 'dashboard',
+  currentClientId: null,
+  calMode: 'month',
+  calRef: new Date(),
   editingRdvId: null,
   editingClientId: null,
-  editingMemberId: null
+  editingMemberId: null,
+  editingPlainteId: null
 };
 
 /* ---------- UTILITAIRES ---------- */
@@ -583,7 +575,7 @@ function formatDateShort(dstr){
   const [y,m,d] = dstr.split('-').map(Number);
   return `${pad2(d)}/${pad2(m)}/${y}`;
 }
-function dowMonFirst(jsDay){ return (jsDay+6)%7; } // JS: 0=dimanche -> on veut 0=lundi
+function dowMonFirst(jsDay){ return (jsDay+6)%7; }
 function toastMsg(msg, icon){
   const wrap = document.getElementById('toastWrap');
   const el = document.createElement('div');
@@ -593,8 +585,7 @@ function toastMsg(msg, icon){
   setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .25s'; setTimeout(()=>el.remove(),250); }, 2600);
 }
 
-/* ---------- SON DE NOTIFICATION ---------- */
-/* Petit carillon synthétisé (Web Audio API), aucun fichier externe requis. */
+/* ---------- SON ---------- */
 let audioCtx = null;
 function getAudioCtx(){
   if(!audioCtx){
@@ -608,8 +599,7 @@ function playNotifSound(){
   if(!ctx) return;
   if(ctx.state === 'suspended'){ ctx.resume().catch(()=>{}); }
   const now = ctx.currentTime;
-  const notes = [880, 1175]; // petit carillon à deux tons
-  notes.forEach((freq, i)=>{
+  [880, 1175].forEach((freq, i)=>{
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
@@ -623,24 +613,21 @@ function playNotifSound(){
     osc.stop(start+0.34);
   });
 }
-/* Déverrouille l'audio dès la première interaction (règles des navigateurs) */
 function unlockAudioOnce(){
   getAudioCtx();
   document.removeEventListener('click', unlockAudioOnce);
   document.removeEventListener('keydown', unlockAudioOnce);
 }
 
-/* ---------- CHARGEMENT / DONNÉES DE DÉMO ---------- */
+/* ---------- CHARGEMENT ---------- */
 function loadAll(){
   state.clients = loadRaw(LS.clients, []);
   state.rdv = loadRaw(LS.rdv, []);
   state.equipe = loadRaw(LS.equipe, []);
+  state.plaintes = loadRaw(LS.plaintes, []);
   state.settings = {...state.settings, ...loadRaw(LS.settings, state.settings)};
 }
-
 function seedDemoData(){
-  // Aucune donnée de démonstration : YolaDex démarre entièrement vide.
-  // On marque simplement l'application comme initialisée.
   if(loadRaw(LS.init, false)) return;
   save(LS.init, true);
 }
@@ -660,12 +647,28 @@ function rdvAvecLabel(r){
   const m = getMember(r.avecId);
   return m ? memberFullName(m) : '—';
 }
+function findOrCreateClient(prenom, nom){
+  const found = state.clients.find(c=>(c.prenom||'').trim().toLowerCase()===prenom.toLowerCase() && (c.nom||'').trim().toLowerCase()===nom.toLowerCase());
+  if(found) return found.id;
+  const nc = {id:uid('cli'), prenom, nom, telephone:'', email:'', entreprise:'', adresse:'', notes:'', createdAt:Date.now()};
+  state.clients.push(nc);
+  save(LS.clients, state.clients);
+  return nc.id;
+}
 
-/* ---------- STATUTS DES RENDEZ-VOUS ---------- */
 const STATUT_LABELS = {prevu:'Prévu', en_attente:'En attente', termine:'Terminé', annule:'Annulé'};
 const STATUT_ICONS = {prevu:'🟢', en_attente:'🟡', termine:'🔵', annule:'🔴'};
 function statutLabel(s){ return STATUT_LABELS[s] || s; }
 function isStatutActif(s){ return s==='prevu' || s==='en_attente'; }
+
+/* ---------- STATUTS DES PLAINTES ---------- */
+const PLAINTE_ST = {
+  nouvelle:{l:'Nouvelle', b:'en_attente', i:'🟡'},
+  en_cours:{l:'En cours', b:'prevu', i:'🟢'},
+  resolue:{l:'Résolue', b:'termine', i:'🔵'},
+  rejetee:{l:'Rejetée', b:'annule', i:'🔴'}
+};
+const GRAVITES = ['Faible','Moyenne','Élevée'];
 
 /* =========================================================
    NAVIGATION
@@ -675,6 +678,7 @@ const NAV_ITEMS = [
   {id:'clients', label:'Clients', icon:'👥'},
   {id:'rdv', label:'Rendez-vous', icon:'📅'},
   {id:'calendrier', label:'Calendrier', icon:'🗓️'},
+  {id:'plaintes', label:'Plaintes', icon:'📣'},
   {id:'equipe', label:'Équipe', icon:'🧑‍💼'},
   {id:'parametres', label:'Paramètres', icon:'⚙️'}
 ];
@@ -711,6 +715,7 @@ function render(){
   else if(state.view==='clientDetail') c.innerHTML = viewClientDetail(state.currentClientId);
   else if(state.view==='rdv') c.innerHTML = viewRdv();
   else if(state.view==='calendrier') c.innerHTML = viewCalendrier();
+  else if(state.view==='plaintes') c.innerHTML = viewPlaintes();
   else if(state.view==='equipe') c.innerHTML = viewEquipe();
   else if(state.view==='parametres') c.innerHTML = viewParametres();
   bindViewEvents();
@@ -725,11 +730,12 @@ function viewDashboard(){
   const now = nowHM();
   const rdvToday = state.rdv.filter(r=>r.date===today);
   const upcoming = state.rdv.filter(r=> isStatutActif(r.statut) && (r.date > today || (r.date===today && r.heure >= now)));
+  const plaintesOuvertes = state.plaintes.filter(p=>p.statut==='nouvelle'||p.statut==='en_cours');
   const stats = [
     {label:'Clients', value: state.clients.length, icon:'👥', bg:'var(--primary-light)', color:'var(--primary-dark)'},
     {label:"Rendez-vous aujourd'hui", value: rdvToday.length, icon:'📅', bg:'var(--accent-light)', color:'var(--accent)'},
     {label:'Prochains rendez-vous', value: upcoming.length, icon:'🕐', bg:'var(--info-light)', color:'var(--info)'},
-    {label:'Équipe', value: state.equipe.length, icon:'🧑‍💼', bg:'var(--success-light)', color:'var(--success)'}
+    {label:'Plaintes en cours', value: plaintesOuvertes.length, icon:'📣', bg:'var(--danger-light)', color:'var(--danger)'}
   ];
 
   const todaySorted = sortedRdv(rdvToday);
@@ -793,6 +799,24 @@ function viewDashboard(){
         ${upcomingSorted.length ? upcomingSorted.map(r=>rdvRowHtml(r,true)).join('') : emptyState('🗓️','Aucun rendez-vous à venir.')}
       </div>
     </div>
+
+    <div class="card" style="margin-top:18px;">
+      <div class="card-head">
+        <h3>Dernières plaintes</h3>
+        <button class="btn btn-ghost btn-sm" data-nav-inline="plaintes">Voir tout →</button>
+      </div>
+      <div class="card-body">
+        ${[...state.plaintes].sort((a,b)=>b.createdAt-a.createdAt).slice(0,5).map(p=>`
+          <div class="rdv-row" data-edit-plainte="${p.id}">
+            <div class="rdv-time date">${formatDateShort(p.date)}</div>
+            <div class="rdv-info">
+              <div class="name">${escapeHtml(p.objet||'Plainte')}</div>
+              <div class="sub">Par ${escapeHtml(clientFullName(getClient(p.clientId)))}</div>
+            </div>
+            <span class="badge badge-${PLAINTE_ST[p.statut].b}"><span class="badge-dot"></span>${PLAINTE_ST[p.statut].l}</span>
+          </div>`).join('') || emptyState('📣','Aucune plainte enregistrée.')}
+      </div>
+    </div>
   `;
 }
 
@@ -802,7 +826,6 @@ function emptyState(icon, text){
 
 function rdvRowHtml(r, showDate){
   const client = getClient(r.clientId);
-  const statusLabel = statutLabel(r.statut);
   return `
     <div class="rdv-row" data-open-rdv="${r.id}">
       <div class="rdv-time ${showDate ? 'date' : ''}">${showDate ? formatDateShort(r.date) : r.heure}</div>
@@ -811,7 +834,7 @@ function rdvRowHtml(r, showDate){
         <div class="sub">${showDate ? r.heure+' · ' : ''}Avec ${escapeHtml(rdvAvecLabel(r))} · ${escapeHtml(r.motif||'—')}</div>
       </div>
       <button class="icon-mini" title="Signaler l'arrivée du client (son)" data-signal-arrival="${r.id}">🔔</button>
-      <span class="badge badge-${r.statut}"><span class="badge-dot"></span>${statusLabel}</span>
+      <span class="badge badge-${r.statut}"><span class="badge-dot"></span>${statutLabel(r.statut)}</span>
     </div>`;
 }
 
@@ -895,6 +918,7 @@ function viewClientDetail(id){
     return `<button class="back-link" data-nav-inline="clients">← Retour aux clients</button>${emptyState('❓','Ce client est introuvable — il a peut-être été supprimé.')}`;
   }
   const history = sortedRdv(state.rdv.filter(r=>r.clientId===id));
+  const plaintes = state.plaintes.filter(p=>p.clientId===id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   return `
     <button class="back-link" data-nav-inline="clients">← Retour aux clients</button>
     <div class="detail-head">
@@ -905,6 +929,7 @@ function viewClientDetail(id){
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-outline" data-edit-client="${c.id}">Modifier le client</button>
+        <button class="btn btn-outline" data-open="plainte-modal" data-prefill-client="${c.id}">📣 Porter plainte</button>
         <button class="btn btn-primary" data-open="rdv-modal" data-prefill-client="${c.id}">+ Nouveau rendez-vous</button>
       </div>
     </div>
@@ -917,7 +942,7 @@ function viewClientDetail(id){
     </div>
     ${c.notes ? `<div class="card" style="margin-bottom:22px;"><div class="card-body pad"><div class="lbl" style="font-size:11px;color:var(--text-faint);text-transform:uppercase;margin-bottom:6px;">Notes</div><p style="font-size:13.5px;line-height:1.5;">${escapeHtml(c.notes)}</p></div></div>` : ''}
 
-    <div class="card">
+    <div class="card" style="margin-bottom:18px;">
       <div class="card-head"><h3>Historique des rendez-vous</h3></div>
       <div class="card-body">
         ${history.length ? [...history].reverse().map(r=>`
@@ -930,6 +955,21 @@ function viewClientDetail(id){
             <button class="icon-mini" title="Signaler l'arrivée du client (son)" data-signal-arrival="${r.id}">🔔</button>
             <span class="badge badge-${r.statut}"><span class="badge-dot"></span>${statutLabel(r.statut)}</span>
           </div>`).join('') : emptyState('📅','Aucun rendez-vous pour ce client pour le moment.')}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Plaintes</h3></div>
+      <div class="card-body">
+        ${plaintes.length ? plaintes.map(p=>`
+          <div class="rdv-row" data-edit-plainte="${p.id}">
+            <div class="rdv-time date">${formatDateShort(p.date)}</div>
+            <div class="rdv-info">
+              <div class="name">${escapeHtml(p.objet||'Plainte')}</div>
+              <div class="sub">Gravité : ${escapeHtml(p.gravite||'—')}</div>
+            </div>
+            <span class="badge badge-${PLAINTE_ST[p.statut].b}"><span class="badge-dot"></span>${PLAINTE_ST[p.statut].l}</span>
+          </div>`).join('') : emptyState('📣','Aucune plainte pour ce client.')}
       </div>
     </div>
   `;
@@ -1117,6 +1157,78 @@ function renderDayAgenda(ref){
 }
 
 /* =========================================================
+   VUE : PLAINTES
+   ========================================================= */
+let plainteSearchTerm = '';
+let plainteStatusFilter = 'tous';
+
+function viewPlaintes(){
+  let list = [...state.plaintes].sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  if(plainteStatusFilter!=='tous') list = list.filter(p=>p.statut===plainteStatusFilter);
+  if(plainteSearchTerm){
+    const q = plainteSearchTerm.toLowerCase();
+    list = list.filter(p=>[clientFullName(getClient(p.clientId)), p.objet, p.description, p.contre].some(v=>(v||'').toLowerCase().includes(q)));
+  }
+
+  return `
+    <div class="page-head">
+      <div><h2>Plaintes</h2><p>${state.plaintes.length} plainte${state.plaintes.length>1?'s':''} enregistrée${state.plaintes.length>1?'s':''}</p></div>
+      <button class="btn btn-primary" data-open="plainte-modal">+ Porter plainte</button>
+    </div>
+
+    <div class="toolbar">
+      <div class="search-wrap">
+        <span class="search-ic">🔍</span>
+        <input type="text" id="plainteSearchInput" placeholder="Rechercher une plainte..." value="${escapeHtml(plainteSearchTerm)}">
+      </div>
+      <select id="plainteStatusFilter">
+        <option value="tous" ${plainteStatusFilter==='tous'?'selected':''}>Tous les statuts</option>
+        ${Object.entries(PLAINTE_ST).map(([k,v])=>`<option value="${k}" ${plainteStatusFilter===k?'selected':''}>${v.i} ${v.l}</option>`).join('')}
+      </select>
+    </div>
+
+    ${list.length===0 ? emptyState('📣', plainteSearchTerm||plainteStatusFilter!=='tous' ? 'Aucune plainte ne correspond.' : 'Aucune plainte pour le moment. Cliquez sur « Porter plainte ».') : `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th class="col-date">Date</th><th>Plaignant</th><th>Objet</th><th>Mise en cause</th><th>Gravité</th><th class="col-status">Statut</th><th class="col-actions">Actions</th></tr></thead>
+        <tbody>
+          ${list.map(p=>`<tr>
+            <td class="col-date">${formatDateShort(p.date)}</td>
+            <td class="row-name" data-open-client="${p.clientId}">${escapeHtml(clientFullName(getClient(p.clientId)))}</td>
+            <td>${escapeHtml(p.objet||'—')}</td>
+            <td>${escapeHtml(p.contre||'—')}</td>
+            <td>${escapeHtml(p.gravite||'—')}</td>
+            <td class="col-status"><span class="badge badge-${PLAINTE_ST[p.statut].b}"><span class="badge-dot"></span>${PLAINTE_ST[p.statut].l}</span></td>
+            <td class="col-actions"><div class="row-actions">
+              <button class="icon-mini" title="Modifier" data-edit-plainte="${p.id}">✏️</button>
+              <button class="icon-mini danger" title="Supprimer" data-del-plainte="${p.id}">🗑️</button>
+            </div></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="card-list">
+      ${list.map(p=>`<div class="item-card">
+        <div class="ic-top">
+          <div>
+            <div class="ic-title">${escapeHtml(p.objet||'Plainte')}</div>
+            <div class="ic-sub">${formatDateShort(p.date)} · Par ${escapeHtml(clientFullName(getClient(p.clientId)))}</div>
+          </div>
+          <div class="row-actions">
+            <button class="icon-mini" data-edit-plainte="${p.id}">✏️</button>
+            <button class="icon-mini danger" data-del-plainte="${p.id}">🗑️</button>
+          </div>
+        </div>
+        <div class="ic-foot">
+          <span class="badge badge-${PLAINTE_ST[p.statut].b}"><span class="badge-dot"></span>${PLAINTE_ST[p.statut].l}</span>
+          <span style="font-size:12px;color:var(--text-muted);">Gravité : ${escapeHtml(p.gravite||'—')}</span>
+        </div>
+      </div>`).join('')}
+    </div>`}
+  `;
+}
+
+/* =========================================================
    VUE : ÉQUIPE
    ========================================================= */
 const ROLE_ICONS = {'Patron':'👑','Directeur':'🧑\u200d💼','Chef':'🧑\u200d💼','Responsable':'👨\u200d💻','Secrétaire':'📞','Employé':'👷','Autre':'🔹'};
@@ -1204,7 +1316,7 @@ function viewParametres(){
 
       <div class="danger-zone">
         <h4>⚠️ Réinitialiser les données</h4>
-        <p>Cette action supprime définitivement tous les clients, rendez-vous et membres de l'équipe enregistrés dans ce navigateur.</p>
+        <p>Cette action supprime définitivement tous les clients, rendez-vous, plaintes et membres de l'équipe enregistrés dans ce navigateur.</p>
         <button class="btn btn-danger" id="resetDataBtn">Réinitialiser toutes les données</button>
       </div>
     </div>
@@ -1223,14 +1335,16 @@ function runGlobalSearch(q){
     const c = getClient(r.clientId);
     return [clientFullName(c), r.motif].some(v=>(v||'').toLowerCase().includes(query));
   }).slice(0,5);
+  const plaintes = state.plaintes.filter(p=>[clientFullName(getClient(p.clientId)), p.objet, p.contre].some(v=>(v||'').toLowerCase().includes(query))).slice(0,5);
   const membres = state.equipe.filter(m=>[m.prenom,m.nom,m.role].some(v=>(v||'').toLowerCase().includes(query))).slice(0,5);
 
-  if(!clients.length && !rdvs.length && !membres.length){
+  if(!clients.length && !rdvs.length && !plaintes.length && !membres.length){
     box.innerHTML = `<div class="sr-empty">Aucun résultat pour « ${escapeHtml(q)} »</div>`;
   } else {
     box.innerHTML = `
       ${clients.length ? `<div class="sr-group-title">Clients</div>${clients.map(c=>`<button class="sr-item" data-sr-client="${c.id}">${escapeHtml(clientFullName(c))}<small>${escapeHtml(c.entreprise||c.email||'')}</small></button>`).join('')}` : ''}
       ${rdvs.length ? `<div class="sr-group-title">Rendez-vous</div>${rdvs.map(r=>`<button class="sr-item" data-sr-rdv="${r.id}">${escapeHtml(clientFullName(getClient(r.clientId)))} — ${formatDateShort(r.date)} à ${r.heure}<small>${escapeHtml(r.motif||'')}</small></button>`).join('')}` : ''}
+      ${plaintes.length ? `<div class="sr-group-title">Plaintes</div>${plaintes.map(p=>`<button class="sr-item" data-sr-plainte="${p.id}">${escapeHtml(p.objet||'Plainte')} — ${formatDateShort(p.date)}<small>${escapeHtml(clientFullName(getClient(p.clientId)))}</small></button>`).join('')}` : ''}
       ${membres.length ? `<div class="sr-group-title">Équipe</div>${membres.map(m=>`<button class="sr-item" data-sr-member="${m.id}">${escapeHtml(memberFullName(m))}<small>${escapeHtml(m.role||'')}</small></button>`).join('')}` : ''}
     `;
   }
@@ -1243,7 +1357,6 @@ function runGlobalSearch(q){
 function computeNotifications(){
   const list = [];
   const today = todayStr();
-  const now = nowHM();
   const todayRdv = state.rdv.filter(r=>r.date===today && isStatutActif(r.statut));
   todayRdv.forEach(r=>{
     const client = getClient(r.clientId);
@@ -1252,20 +1365,22 @@ function computeNotifications(){
     const nowMinutes = new Date().getHours()*60+new Date().getMinutes();
     const delta = rdvMinutes - nowMinutes;
     if(delta>=0 && delta<=30){
-      list.push({icon:'🔔', text:`Rendez-vous avec ${clientFullName(client)} dans ${delta<=1?'moins d\'une minute':delta+' min'}`, time:r.heure, key:`rdv-imminent-${r.id}`});
+      list.push({icon:'🔔', text:`Rendez-vous avec ${clientFullName(client)} dans ${delta<=1?'moins d\'une minute':delta+' min'}`, time:r.heure});
     } else {
-      list.push({icon:'🔔', text:`Rendez-vous aujourd'hui avec ${clientFullName(client)}`, time:r.heure, key:`rdv-today-${r.id}`});
+      list.push({icon:'🔔', text:`Rendez-vous aujourd'hui avec ${clientFullName(client)}`, time:r.heure});
     }
   });
+  state.plaintes.filter(p=>p.statut==='nouvelle').forEach(p=>{
+    list.push({icon:'📣', text:`Plainte à traiter : ${p.objet||'sans objet'}`, time:formatDateShort(p.date)});
+  });
   const recentClients = state.clients.filter(c=> (Date.now()-c.createdAt) < 1000*60*60*24 );
-  recentClients.forEach(c=> list.push({icon:'🔔', text:`Nouveau client ajouté : ${clientFullName(c)}`, time:'récemment', key:`newclient-${c.id}`}));
+  recentClients.forEach(c=> list.push({icon:'🔔', text:`Nouveau client ajouté : ${clientFullName(c)}`, time:'récemment'}));
   return list;
 }
 function updateNotifDot(){
   const list = computeNotifications();
   document.getElementById('notifDot').classList.toggle('hidden', list.length===0);
 }
-/* Signale manuellement l'arrivée d'un client : joue un son + un toast */
 function signalArrival(rdvId){
   const r = state.rdv.find(x=>x.id===rdvId);
   if(!r) return;
@@ -1281,7 +1396,7 @@ function renderNotifPanel(){
 }
 
 /* =========================================================
-   MODALS — GÉNÉRIQUE
+   MODALS
    ========================================================= */
 function openModal(html){
   document.getElementById('modalRoot').innerHTML = `<div class="modal-overlay" id="activeOverlay">${html}</div>`;
@@ -1289,7 +1404,6 @@ function openModal(html){
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
 
-/* ---------- MODAL CLIENT ---------- */
 function openClientModal(clientId){
   state.editingClientId = clientId || null;
   const c = clientId ? getClient(clientId) : {prenom:'',nom:'',telephone:'',email:'',entreprise:'',adresse:'',notes:''};
@@ -1341,7 +1455,6 @@ function openClientModal(clientId){
   };
 }
 
-/* ---------- MODAL RENDEZ-VOUS ---------- */
 function openRdvModal(rdvId, prefillClientId){
   state.editingRdvId = rdvId || null;
   const r = rdvId ? state.rdv.find(x=>x.id===rdvId) : {clientId:prefillClientId||'', date:todayStr(), heure:'09:00', avecNom:'', motif:'', notes:'', statut:'prevu'};
@@ -1400,19 +1513,7 @@ function openRdvModal(rdvId, prefillClientId){
     const clientPrenom = document.getElementById('rf_client_prenom').value.trim();
     const clientNom = document.getElementById('rf_client_nom').value.trim();
     if(!clientPrenom || !clientNom){ toastMsg('Le prénom et le nom du client sont obligatoires.', '⚠️'); return; }
-
-    let clientId;
-    const nameUnchanged = existingClient &&
-      clientPrenom.toLowerCase() === (existingClient.prenom||'').trim().toLowerCase() &&
-      clientNom.toLowerCase() === (existingClient.nom||'').trim().toLowerCase();
-    if(nameUnchanged){
-      clientId = existingClient.id;
-    } else {
-      const newClient = {id:uid('cli'), prenom:clientPrenom, nom:clientNom, telephone:'', email:'', entreprise:'', adresse:'', notes:'', createdAt:Date.now()};
-      state.clients.push(newClient);
-      clientId = newClient.id;
-      save(LS.clients, state.clients);
-    }
+    const clientId = findOrCreateClient(clientPrenom, clientNom);
 
     const avecNom = document.getElementById('rf_avec_input').value.trim();
     const date = document.getElementById('rf_date').value;
@@ -1439,7 +1540,89 @@ function openRdvModal(rdvId, prefillClientId){
   };
 }
 
-/* ---------- MODAL MEMBRE D'ÉQUIPE ---------- */
+/* ---------- MODAL PLAINTE ---------- */
+function openPlainteModal(plainteId, prefillClientId){
+  state.editingPlainteId = plainteId || null;
+  const p = plainteId ? state.plaintes.find(x=>x.id===plainteId)
+    : {clientId:prefillClientId||'', date:todayStr(), objet:'', contre:'', gravite:'Moyenne', description:'', suite:'', statut:'nouvelle'};
+  const cl = p.clientId ? getClient(p.clientId) : null;
+
+  openModal(`
+    <div class="modal modal-wide">
+      <div class="modal-head"><h3>${plainteId?'Modifier la plainte':'Porter plainte'}</h3><button class="modal-close" id="mClose">✕</button></div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="form-field"><label>Prénom du plaignant *</label><input type="text" id="pf_prenom" value="${escapeHtml(cl?cl.prenom:'')}"></div>
+          <div class="form-field"><label>Nom du plaignant *</label><input type="text" id="pf_nom" value="${escapeHtml(cl?cl.nom:'')}"></div>
+          <div class="form-field"><label>Date *</label><input type="date" id="pf_date" value="${p.date}"></div>
+          <div class="form-field"><label>Gravité</label>
+            <select id="pf_gravite">${GRAVITES.map(g=>`<option value="${g}" ${p.gravite===g?'selected':''}>${g}</option>`).join('')}</select>
+          </div>
+          <div class="form-field full"><label>Objet de la plainte *</label><input type="text" id="pf_objet" placeholder="Ex. : retard de livraison, comportement, facturation..." value="${escapeHtml(p.objet)}"></div>
+          <div class="form-field full"><label>Personne / service mis en cause</label><input type="text" id="pf_contre" value="${escapeHtml(p.contre||'')}"></div>
+          <div class="form-field full"><label>Description des faits</label><textarea id="pf_desc">${escapeHtml(p.description)}</textarea></div>
+          <div class="form-field full"><label>Suite donnée / résolution</label><textarea id="pf_suite">${escapeHtml(p.suite||'')}</textarea></div>
+          <div class="form-field full">
+            <label>Statut</label>
+            <div class="status-options">
+              ${Object.entries(PLAINTE_ST).map(([k,v])=>`<button type="button" class="status-opt ${v.b} ${p.statut===k?'selected':''}" data-status="${k}">${v.i} ${v.l}</button>`).join('')}
+            </div>
+            <input type="hidden" id="pf_statut" value="${p.statut}">
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot" style="${plainteId?'justify-content:space-between;':''}">
+        ${plainteId ? `<button class="btn btn-danger" id="mDeletePlainte">🗑️ Supprimer</button>` : ''}
+        <div style="display:flex;gap:10px;${plainteId?'':'width:100%;justify-content:flex-end;'}">
+          <button class="btn btn-outline" id="mCancel">Annuler</button>
+          <button class="btn btn-primary" id="mSavePlainte">Enregistrer</button>
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('mClose').onclick = closeModal;
+  document.getElementById('mCancel').onclick = closeModal;
+  const delBtn = document.getElementById('mDeletePlainte');
+  if(delBtn) delBtn.onclick = ()=>{ closeModal(); deletePlainte(plainteId); };
+
+  document.querySelectorAll('.status-opt').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('.status-opt').forEach(b=>b.classList.remove('selected'));
+      btn.classList.add('selected');
+      document.getElementById('pf_statut').value = btn.dataset.status;
+    });
+  });
+
+  document.getElementById('mSavePlainte').onclick = ()=>{
+    const prenom = document.getElementById('pf_prenom').value.trim();
+    const nom = document.getElementById('pf_nom').value.trim();
+    const objet = document.getElementById('pf_objet').value.trim();
+    const date = document.getElementById('pf_date').value;
+    if(!prenom || !nom || !objet){ toastMsg('Prénom, nom et objet sont obligatoires.', '⚠️'); return; }
+    if(!date){ toastMsg('La date est obligatoire.', '⚠️'); return; }
+    const clientId = findOrCreateClient(prenom, nom);
+    const data = {
+      clientId, date, objet,
+      contre: document.getElementById('pf_contre').value.trim(),
+      gravite: document.getElementById('pf_gravite').value,
+      description: document.getElementById('pf_desc').value.trim(),
+      suite: document.getElementById('pf_suite').value.trim(),
+      statut: document.getElementById('pf_statut').value
+    };
+    if(state.editingPlainteId){
+      const idx = state.plaintes.findIndex(x=>x.id===state.editingPlainteId);
+      state.plaintes[idx] = {...state.plaintes[idx], ...data};
+      toastMsg('Plainte modifiée avec succès.');
+    } else {
+      state.plaintes.push({id:uid('plt'), ...data, createdAt:Date.now()});
+      toastMsg('Plainte enregistrée.', '📣');
+    }
+    save(LS.plaintes, state.plaintes);
+    closeModal();
+    render();
+  };
+}
+
 const ROLES = ['Patron','Directeur','Chef','Responsable','Secrétaire','Employé','Autre'];
 function openMemberModal(memberId){
   state.editingMemberId = memberId || null;
@@ -1491,7 +1674,6 @@ function openMemberModal(memberId){
   };
 }
 
-/* ---------- MODAL DE CONFIRMATION ---------- */
 function openConfirmModal(message, onConfirm){
   openModal(`
     <div class="modal confirm-modal" style="max-width:420px;">
@@ -1510,14 +1692,16 @@ function openConfirmModal(message, onConfirm){
 }
 
 /* =========================================================
-   ACTIONS DE SUPPRESSION
+   SUPPRESSIONS
    ========================================================= */
 function deleteClient(id){
-  openConfirmModal('Voulez-vous vraiment supprimer ce client ? Ses rendez-vous associés seront également supprimés.', ()=>{
+  openConfirmModal('Voulez-vous vraiment supprimer ce client ? Ses rendez-vous et plaintes associés seront également supprimés.', ()=>{
     state.clients = state.clients.filter(c=>c.id!==id);
     state.rdv = state.rdv.filter(r=>r.clientId!==id);
+    state.plaintes = state.plaintes.filter(p=>p.clientId!==id);
     save(LS.clients, state.clients);
     save(LS.rdv, state.rdv);
+    save(LS.plaintes, state.plaintes);
     toastMsg('Client supprimé.');
     if(state.view==='clientDetail' && state.currentClientId===id) goTo('clients');
     else render();
@@ -1528,6 +1712,14 @@ function deleteRdv(id){
     state.rdv = state.rdv.filter(r=>r.id!==id);
     save(LS.rdv, state.rdv);
     toastMsg('Rendez-vous supprimé.');
+    render();
+  });
+}
+function deletePlainte(id){
+  openConfirmModal('Voulez-vous vraiment supprimer cette plainte ?', ()=>{
+    state.plaintes = state.plaintes.filter(p=>p.id!==id);
+    save(LS.plaintes, state.plaintes);
+    toastMsg('Plainte supprimée.');
     render();
   });
 }
@@ -1544,6 +1736,7 @@ function resetAllData(){
     localStorage.removeItem(LS.clients);
     localStorage.removeItem(LS.rdv);
     localStorage.removeItem(LS.equipe);
+    localStorage.removeItem(LS.plaintes);
     loadAll();
     toastMsg('Toutes les données ont été réinitialisées.');
     goTo('dashboard');
@@ -1551,7 +1744,7 @@ function resetAllData(){
 }
 
 /* =========================================================
-   THÈME
+   THÈME / SON
    ========================================================= */
 function applyTheme(){
   document.documentElement.setAttribute('data-theme', state.settings.theme);
@@ -1576,7 +1769,7 @@ function toggleSound(){
 }
 
 /* =========================================================
-   ÉVÉNEMENTS DE VUE (délégation légère après chaque render)
+   ÉVÉNEMENTS DE VUE
    ========================================================= */
 function bindViewEvents(){
   const content = document.getElementById('content');
@@ -1591,12 +1784,16 @@ function bindViewEvents(){
   content.querySelectorAll('[data-del-rdv]').forEach(el=> el.addEventListener('click', (e)=>{ e.stopPropagation(); deleteRdv(el.dataset.delRdv); }));
   content.querySelectorAll('[data-signal-arrival]').forEach(el=> el.addEventListener('click', (e)=>{ e.stopPropagation(); signalArrival(el.dataset.signalArrival); }));
 
+  content.querySelectorAll('[data-edit-plainte]').forEach(el=> el.addEventListener('click', (e)=>{ e.stopPropagation(); openPlainteModal(el.dataset.editPlainte); }));
+  content.querySelectorAll('[data-del-plainte]').forEach(el=> el.addEventListener('click', (e)=>{ e.stopPropagation(); deletePlainte(el.dataset.delPlainte); }));
+
   content.querySelectorAll('[data-edit-member]').forEach(el=> el.addEventListener('click', ()=> openMemberModal(el.dataset.editMember)));
   content.querySelectorAll('[data-del-member]').forEach(el=> el.addEventListener('click', ()=> deleteMember(el.dataset.delMember)));
 
   content.querySelectorAll('[data-open="client-modal"]').forEach(el=> el.addEventListener('click', ()=> openClientModal()));
   content.querySelectorAll('[data-open="member-modal"]').forEach(el=> el.addEventListener('click', ()=> openMemberModal()));
   content.querySelectorAll('[data-open="rdv-modal"]').forEach(el=> el.addEventListener('click', ()=> openRdvModal(null, el.dataset.prefillClient)));
+  content.querySelectorAll('[data-open="plainte-modal"]').forEach(el=> el.addEventListener('click', ()=> openPlainteModal(null, el.dataset.prefillClient)));
 
   const clientSearch = document.getElementById('clientSearchInput');
   if(clientSearch) clientSearch.addEventListener('input', (e)=>{ clientSearchTerm = e.target.value; renderPartialClients(); });
@@ -1606,7 +1803,11 @@ function bindViewEvents(){
   const rdvFilter = document.getElementById('rdvStatusFilter');
   if(rdvFilter) rdvFilter.addEventListener('change', (e)=>{ rdvStatusFilter = e.target.value; renderPartialRdv(); });
 
-  // Calendrier
+  const plainteSearch = document.getElementById('plainteSearchInput');
+  if(plainteSearch) plainteSearch.addEventListener('input', (e)=>{ plainteSearchTerm = e.target.value; renderPartialPlaintes(); });
+  const plainteFilter = document.getElementById('plainteStatusFilter');
+  if(plainteFilter) plainteFilter.addEventListener('change', (e)=>{ plainteStatusFilter = e.target.value; renderPartialPlaintes(); });
+
   const calPrev = document.getElementById('calPrev');
   const calNext = document.getElementById('calNext');
   const calToday = document.getElementById('calToday');
@@ -1615,7 +1816,6 @@ function bindViewEvents(){
   if(calToday) calToday.addEventListener('click', ()=>{ state.calRef = new Date(); render(); });
   content.querySelectorAll('[data-calmode]').forEach(el=> el.addEventListener('click', ()=>{ state.calMode = el.dataset.calmode; render(); }));
 
-  // Paramètres
   const saveSettingsBtn = document.getElementById('saveSettingsBtn');
   if(saveSettingsBtn) saveSettingsBtn.addEventListener('click', ()=>{
     state.settings.companyName = document.getElementById('setCompanyName').value.trim() || 'YolaDex';
@@ -1642,7 +1842,6 @@ function shiftCal(dir){
   render();
 }
 
-/* Rendus partiels (pour ne pas perdre le focus du champ de recherche pendant la frappe) */
 function renderPartialClients(){
   document.getElementById('content').innerHTML = viewClients();
   bindViewEvents();
@@ -1659,9 +1858,18 @@ function renderPartialRdv(){
     el.setSelectionRange(el.value.length, el.value.length);
   }
 }
+function renderPartialPlaintes(){
+  document.getElementById('content').innerHTML = viewPlaintes();
+  bindViewEvents();
+  const el = document.getElementById('plainteSearchInput');
+  if(el && document.activeElement !== document.getElementById('plainteStatusFilter')){
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }
+}
 
 /* =========================================================
-   ÉVÉNEMENTS GLOBAUX (topbar, sidebar mobile)
+   ÉVÉNEMENTS GLOBAUX
    ========================================================= */
 function initGlobalEvents(){
   document.getElementById('themeToggleBtn').addEventListener('click', toggleTheme);
@@ -1679,11 +1887,13 @@ function initGlobalEvents(){
   document.getElementById('globalSearchResults').addEventListener('click', (e)=>{
     const cid = e.target.closest('[data-sr-client]')?.dataset.srClient;
     const rid = e.target.closest('[data-sr-rdv]')?.dataset.srRdv;
+    const pid = e.target.closest('[data-sr-plainte]')?.dataset.srPlainte;
     const mid = e.target.closest('[data-sr-member]')?.dataset.srMember;
     if(cid){ goTo('clientDetail', {clientId:cid}); }
     else if(rid){ goTo('rdv'); setTimeout(()=>openRdvModal(rid),0); }
+    else if(pid){ goTo('plaintes'); setTimeout(()=>openPlainteModal(pid),0); }
     else if(mid){ goTo('equipe'); }
-    if(cid||rid||mid){
+    if(cid||rid||pid||mid){
       searchInput.value=''; document.getElementById('globalSearchResults').classList.add('hidden');
     }
   });
